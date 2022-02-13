@@ -4,7 +4,7 @@ const fs = require('fs');
 // RINKEBY
 const INFURA_RINKEBY_KEY="39f6b87b938e4c6bb51e8691c17c0492";
 const INFURA_RINKEBY_URL=`https://rinkeby.infura.io/v3/${INFURA_RINKEBY_KEY}`;
-const RINKEBY_PRIV_KEY="9c16c6dd5898261e89bcd8de79be9510a482298b24d27b5634f3bd6d6cdfec21";
+const RINKEBY_PRIV_KEY="e2d89af38048ad31b67c9d98ae68dab7e1b83ca0b70976755f3fd7a043c375aa";
 const RINKEBY_CONTRACT_ADDR="0xeDF584a3244859B848dd87941069bf42367a57eB";
 
 // MAINNET
@@ -20,29 +20,36 @@ const BN = WEB3.utils.BN;
 var STREAM = fs.createWriteStream(`${new Date().toISOString()}.txt`, {flags: 'a'});
 
 function importMainWallet(mainWalletSk) {
-    WEB3.eth.accounts.wallet.add(mainWalletSk);
+    return WEB3.eth.accounts.wallet.add(mainWalletSk);
 }
 
-async function createWallet() {
-    const wallets = WEB3.eth.accounts.wallet.create(1);
+function importWalletsFromFile(filepath) {
+    const data = fs.readFileSync(filepath, "utf8");
+    const rows = data.split(/\r?\n/);
 
+    const wallets = rows.map(row => {
+        return WEB3.eth.accounts.wallet.add(row);
+    });
 
-    await transferEther(
-        wallets[wallets.length - 1].address,
-        wallets[wallets.length - 2].address
-    );
-
-    return wallets[wallets.length - 1];
+    return wallets;
 }
 
-async function getNftPrice(address) {
-    const isWhitelisted = await CONTRACT.methods._whitelisted(address).call();
-    var price;
-    if (isWhitelisted) {
-        price = await CONTRACT.methods.whitelistPrice().call();
-    } else {
-        price = await CONTRACT.methods.salePrice().call();
-    }
+// async function createWallet() {
+//     const wallets = WEB3.eth.accounts.wallet.create(1);
+
+//     return wallets[wallets.length - 1];
+// }
+
+async function getNftPrice() {
+    // const isWhitelisted = await CONTRACT.methods._whitelisted(address).call();
+    // var price;
+    // if (isWhitelisted) {
+    //     price = await CONTRACT.methods.whitelistPrice().call();
+    // } else {
+    //     price = await CONTRACT.methods.salePrice().call();
+    // }
+
+    const price = await CONTRACT.methods.salePrice().call();
 
     return price;
 }
@@ -58,27 +65,32 @@ async function estimateMintGas(addrFrom, amount) {
     return estimatedGas;
 }
 
-async function mintNft(walletFrom, amount) {
-    const addrFrom = walletFrom.address;
+async function mintNft(walletMintFrom, amount) {
+    const addrFrom = walletMintFrom.address;
     console.log(`Minting ${amount} NFTS from address ${addrFrom}`);
 
-    const gasLimit = await estimateMintGas(addrFrom, amount);
-    const gasPrice = await WEB3.eth.getGasPrice();
-    
     const price = await getNftPrice(addrFrom);
     const cost = new BN(price).mul(new BN(amount)).toString();
 
-    const res = await CONTRACT.methods.publicMint(amount).send({
-        from: addrFrom, 
-        value: cost,
-        gasPrice: gasPrice,
-        gas: gasLimit
-    });
+    const gasPrice = await WEB3.eth.getGasPrice();
+    const gasLimit = await estimateMintGas(addrFrom, amount);
+
+    try {
+        const res = await CONTRACT.methods.publicMint(amount).send({
+            from: addrFrom, 
+            value: cost,
+            gasPrice: gasPrice,
+            gas: gasLimit
+        });
+    } catch (err) {
+        console.log(`Mint failed from ${addrFrom}!`);
+        throw err;
+    }
 
     console.log(`Minted ${amount} NFTS for address ${addrFrom}`);
 
     const fee = new BN(gasLimit).mul(new BN(gasPrice)).toString();
-    STREAM.write(`${walletFrom.address} ${walletFrom.privateKey} ${amount} ${fee}\n`);
+    STREAM.write(`${walletMintFrom.address} ${walletMintFrom.privateKey} ${amount} ${fee}\n`);
 }
 
 async function transferEther(receiver, sender) {
@@ -86,9 +98,13 @@ async function transferEther(receiver, sender) {
 
     const gasPrice = await WEB3.eth.getGasPrice();
 
-    const value = new BN(balance).sub(
-        new BN(ETHER_TRANSFER_GAS).mul(new BN(gasPrice))
-    );
+    const fee = new BN(ETHER_TRANSFER_GAS).mul(new BN(gasPrice));
+
+    if (new BN(balance).lte(fee)) {
+        return;
+    }
+
+    const value = new BN(balance).sub(fee).toString();
 
     await WEB3.eth.sendTransaction({
         to: receiver, 
@@ -97,32 +113,46 @@ async function transferEther(receiver, sender) {
         gas: ETHER_TRANSFER_GAS,
         gasPrice: gasPrice
     });
+
+    console.log(`Transfered ${value.toString()} wei from ${sender} to ${receiver}`);
 }
 
-async function main(mainWalletSk, accountsNum, amountNfts) {
-    const amount = 1;
-    
-    importMainWallet(mainWalletSk);
-    const mainWallet = WEB3.eth.accounts.wallet[0];
-    
+async function returnEther(wallets) {
+    if (wallets.length == 0) return;
 
+    const txPromises = [];
+
+    for (let i = 1; i < wallets.length; i++) {
+        txPromises.push(
+            transferEther(wallets[0].address, wallets[i].address)
+        );
+    }
+
+    await Promise.allSettled(txPromises);
+}
+
+async function main(inputFilepath, accountsNum, amountNfts) {
+    const wallets = importWalletsFromFile(inputFilepath);
+    const mainWallet = wallets[0];
+    const balanceMainWallet = await WEB3.eth.getBalance(mainWallet.address);
+
+    console.log(`Balance of ${mainWallet.address} is ${balanceMainWallet} wei`);
+    
     await mintNft(mainWallet, amountNfts);
 
     try {
-        for (let i = 0; i < accountsNum - 1; i++) {
-            const wallet = await createWallet();
-            await mintNft(wallet, amountNfts);
+        for (let i = 1; i < accountsNum; i++) {
+            await transferEther(wallets[i].address, wallets[i-1].address);
+            await mintNft(wallets[i], amountNfts);
         }
     } catch(err) {
         console.log(err);
     }
 
-    const length = WEB3.eth.accounts.wallet.length;
-    const wallet = WEB3.eth.accounts.wallet[length - 1];
-    await transferEther(mainWallet.address, wallet.address);
+    // await returnEther(wallets);
 }
 
-main(RINKEBY_PRIV_KEY, 3, 1)
+main('input_example.txt', 3, 1)
     .then(() => {
         console.log("Finished!");
     })

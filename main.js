@@ -5,7 +5,7 @@ const fs = require('fs');
 const INFURA_RINKEBY_KEY="39f6b87b938e4c6bb51e8691c17c0492";
 const INFURA_RINKEBY_URL=`https://rinkeby.infura.io/v3/${INFURA_RINKEBY_KEY}`;
 const RINKEBY_PRIV_KEY="e2d89af38048ad31b67c9d98ae68dab7e1b83ca0b70976755f3fd7a043c375aa";
-const RINKEBY_CONTRACT_ADDR="0xeDF584a3244859B848dd87941069bf42367a57eB";
+const RINKEBY_CONTRACT_ADDR="0xdC21Fdf670f11794230d3B8fa924cF77D9C0eC01";
 
 // MAINNET
 ////////////////////////////////
@@ -34,22 +34,8 @@ function importWalletsFromFile(filepath) {
     return wallets;
 }
 
-// async function createWallet() {
-//     const wallets = WEB3.eth.accounts.wallet.create(1);
-
-//     return wallets[wallets.length - 1];
-// }
-
 async function getNftPrice() {
-    // const isWhitelisted = await CONTRACT.methods._whitelisted(address).call();
-    // var price;
-    // if (isWhitelisted) {
-    //     price = await CONTRACT.methods.whitelistPrice().call();
-    // } else {
-    //     price = await CONTRACT.methods.salePrice().call();
-    // }
-
-    const price = await CONTRACT.methods.salePrice().call();
+    const price = await CONTRACT.methods._price().call();
 
     return price;
 }
@@ -57,7 +43,7 @@ async function getNftPrice() {
 async function estimateMintGas(addrFrom, amount) {
     const price = await getNftPrice(addrFrom);
     const cost = new BN(price).mul(new BN(amount)).toString();
-    const estimatedGas = await CONTRACT.methods.publicMint(amount).estimateGas({
+    const estimatedGas = await CONTRACT.methods.mint(addrFrom, amount).estimateGas({
         from: addrFrom, 
         value: cost
     });
@@ -76,7 +62,7 @@ async function mintNft(walletMintFrom, amount) {
     const gasLimit = await estimateMintGas(addrFrom, amount);
 
     try {
-        const res = await CONTRACT.methods.publicMint(amount).send({
+        const res = await CONTRACT.methods.mint(addrFrom, amount).send({
             from: addrFrom, 
             value: cost,
             gasPrice: gasPrice,
